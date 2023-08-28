@@ -1,22 +1,26 @@
 const app = require("express")();
 const http = require("http").Server(app);
-const io = require("socket.io")(http);
-const port = process.env.PORT || 3000;
 
 const PoweredUP = require("node-poweredup");
 const poweredUP = new PoweredUP.PoweredUP();
-const TRAIN_LED_COLOR = PoweredUP.Consts.Color.P;
 
 // Imports the Google Cloud client library
 const {PubSub} = require('@google-cloud/pubsub');
 const { stringify } = require("querystring");
 
+// Get config file
+const config = require("./config.json");
+var train = config.train;
+
 let projectId = "next-data-hive-2023";
 let topicId = "train-telemetry";
-let subscriptionId = "train-actions-sub";
+let subscriptionId = `train-actions-${train}-sub`;
 const pubSubClient = new PubSub({projectId});
-var messageResponse = {};
+
 let run_interval = 2;
+var trainState = {};
+trainState.trainId = train;
+var messageResponse = {};
 
 
 async function publishMessage(topicNameOrId, data) {
@@ -35,7 +39,6 @@ async function publishMessage(topicNameOrId, data) {
 
 function listenForMessages(subscriptionNameOrId, timeout) {
   // References an existing subscription
-
   const subscription = pubSubClient.subscription(subscriptionNameOrId);
 
   // Create an event handler to handle messages
@@ -43,25 +46,24 @@ function listenForMessages(subscriptionNameOrId, timeout) {
 
   const messageHandler = message => {
     console.log(`Received message ${message.id}:`);
-    console.log(`\tData: ${message.data}`);
-    console.log(`\tAttributes: ${message.attributes}`);
 
     messageCount += 1;
 
     messageData = JSON.parse(message.data);
 
+    
     messageResponse = {
       "messageId" : message.id,
+      "train" : message.attributes.train,
       "state" : messageData.state,
-      "speed" : messageData.value
+      "value" : messageData.value
     };
 
-
-  
     console.log(`${JSON.stringify(messageResponse)}`);
 
     // "Ack" (acknowledge receipt of) the message
     message.ack();
+
   };
 
   // Listen for new messages until timeout is hit
@@ -72,10 +74,11 @@ function listenForMessages(subscriptionNameOrId, timeout) {
 // Connect to the Duplo train base
 poweredUP.on("discover", async (hub) => {
     console.log("Train connected");
+    
     await hub.connect();
     if (hub instanceof PoweredUP.DuploTrainBase) {
       const train = hub;
-  
+
       let motor = await train.waitForDeviceByType(
         PoweredUP.Consts.DeviceType.DUPLO_TRAIN_BASE_MOTOR
       );
@@ -85,36 +88,36 @@ poweredUP.on("discover", async (hub) => {
       );
 
       setInterval(async () => {
-
         listenForMessages(subscriptionId, 1000);
-        console.log(messageResponse);
-        console.log(`Battery Remaining: ${hub.batteryLevel}`);
-        console.log(`Speed: ${parseInt(messageResponse.speed ?? 0)}`);
-        // TODO: set the right publish actions
-        motor.setPower(messageResponse.speed ?? 0);
-        sounds.playSound(10);
-        publishMessage(topicId, JSON.stringify(messageResponse));
+        if ("state" in messageResponse) {
+          if ("speed" === messageResponse.state) {
+            console.log('change speed');
+            trainState.speed = messageResponse.value ?? 0;
+            motor.setPower(messageResponse.value ?? 0);
+          }
+          else if ("sound" === messageResponse.state) {
+            console.log('play sound');
+            console.log(messageResponse.value);
+            sounds.playSound(messageResponse.value);
+            trainState.sound = messageResponse.value
+          }
+          else {
+            console.log('Unknown Action, resend to spec');
+          }
+        }
+        motor.setPower(parseInt(trainState.speed) ?? 0);
+        trainState.batteryLevel = hub.batteryLevel;
+        trainState.changeMessage = messageResponse.messageId;
+        console.log(trainState)
+        publishMessage(topicId, JSON.stringify(trainState));
+
+        delete messageResponse.state;
+        delete messageResponse.value;
+        delete messageResponse.messageId;
+        delete trainState.sound;
+        delete trainState.changeMessage;
       }, run_interval * 1000);
     }
   });
 
 poweredUP.scan();
-
-// DuploTrainBaseSound
-// PROPERTIES:
-// Name	Type	Description
-// BRAKE	number	
-// 3
-
-// STATION_DEPARTURE	number	
-// 5
-
-// WATER_REFILL	number	
-// 7
-
-// HORN	number	
-// 9
-
-// STEAM	number	
-// 10
-
