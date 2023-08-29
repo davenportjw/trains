@@ -1,27 +1,12 @@
-const app = require("express")();
-const http = require("http").Server(app);
-
 const PoweredUP = require("node-poweredup");
 const poweredUP = new PoweredUP.PoweredUP();
+poweredUP.scan();
 
-// Imports the Google Cloud client library
 const {PubSub} = require('@google-cloud/pubsub');
-const { stringify } = require("querystring");
-
-// Get config file
-const config = require("./config.json");
-var train = config.train;
 
 let projectId = "next-data-hive-2023";
 let topicId = "train-telemetry";
-let subscriptionId = `train-actions-${train}-sub`;
 const pubSubClient = new PubSub({projectId});
-
-let run_interval = 2;
-var trainState = {};
-trainState.trainId = train;
-var messageResponse = {};
-
 
 async function publishMessage(topicNameOrId, data) {
   const dataBuffer = Buffer.from(data);
@@ -30,40 +15,34 @@ async function publishMessage(topicNameOrId, data) {
       const messageId = await pubSubClient
       .topic(topicNameOrId)
       .publishMessage({data: dataBuffer});
-      console.log(`Message ${messageId} published.`);
   } catch (error) {
       console.error(`Received error while publishing: ${error.message}`);
       process.exitCode = 1;
   }
 }
 
-function listenForMessages(subscriptionNameOrId, timeout) {
-  // References an existing subscription
-  const subscription = pubSubClient.subscription(subscriptionNameOrId);
-
-  // Create an event handler to handle messages
+function listenForMessages(timeout) {
+  let subscriptionId = `train-actions-sub`;
+  const subscription = pubSubClient.subscription(subscriptionId);
+  
   let messageCount = 0;
+  let messageResponse = {};
 
   const messageHandler = message => {
-    console.log(`Received message ${message.id}:`);
-
     messageCount += 1;
-
     messageData = JSON.parse(message.data);
 
-    
     messageResponse = {
-      "messageId" : message.id,
+      "Id" : message.id,
       "train" : message.attributes.train,
       "state" : messageData.state,
       "value" : messageData.value
     };
 
-    console.log(`${JSON.stringify(messageResponse)}`);
+    messages.push(messageResponse);
+    // console.log(`${JSON.stringify(messageResponse)}`);
 
-    // "Ack" (acknowledge receipt of) the message
     message.ack();
-
   };
 
   // Listen for new messages until timeout is hit
@@ -71,53 +50,77 @@ function listenForMessages(subscriptionNameOrId, timeout) {
 
   return messageResponse
 }
+
 // Connect to the Duplo train base
+console.log("PoweredUp. Ready to connect to trains.")
 poweredUP.on("discover", async (hub) => {
-    console.log("Train connected");
+    await hub.connect(); // Connect to hub
+    console.log(`Connected to ${hub.name}!`);
+
+    hub.on("disconnect", () => {
+        console.log("Hub disconnected");
+    })
+    let color = await hub.waitForDeviceByType(
+      PoweredUP.Consts.DeviceType.HUB_LED
+    );
     
-    await hub.connect();
-    if (hub instanceof PoweredUP.DuploTrainBase) {
-      const train = hub;
-
-      let motor = await train.waitForDeviceByType(
-        PoweredUP.Consts.DeviceType.DUPLO_TRAIN_BASE_MOTOR
-      );
-
-      let sounds = await train.waitForDeviceByType(
-        PoweredUP.Consts.DeviceType.DUPLO_TRAIN_BASE_SPEAKER
-      );
-
-      setInterval(async () => {
-        listenForMessages(subscriptionId, 1000);
-        if ("state" in messageResponse) {
-          if ("speed" === messageResponse.state) {
-            console.log('change speed');
-            trainState.speed = messageResponse.value ?? 0;
-            motor.setPower(messageResponse.value ?? 0);
-          }
-          else if ("sound" === messageResponse.state) {
-            console.log('play sound');
-            console.log(messageResponse.value);
-            sounds.playSound(messageResponse.value);
-            trainState.sound = messageResponse.value
-          }
-          else {
-            console.log('Unknown Action, resend to spec');
-          }
-        }
-        motor.setPower(parseInt(trainState.speed) ?? 0);
-        trainState.batteryLevel = hub.batteryLevel;
-        trainState.changeMessage = messageResponse.messageId;
-        console.log(trainState)
-        publishMessage(topicId, JSON.stringify(trainState));
-
-        delete messageResponse.state;
-        delete messageResponse.value;
-        delete messageResponse.messageId;
-        delete trainState.sound;
-        delete trainState.changeMessage;
-      }, run_interval * 1000);
+    if (hub.uuid === "e5a528f72a8c2aa5db6e41b4ac3b5df7") {
+      color.setColor(8)
     }
-  });
+    else {
+      color.setColor(9)
+    }
 
-poweredUP.scan();
+});
+
+var messages = [];
+// Run commands on the train from Pub/Sub
+setInterval(async () => {
+  const hubs = poweredUP.getHubs(); // Get an array of all connected hubs
+  listenForMessages(1000);
+  if (hubs && hubs.length) {
+    messages.forEach(function (message) {
+        hubs.forEach(async (hub) => {
+          let trainState = {};
+          if (hub instanceof PoweredUP.DuploTrainBase) {
+            
+            let motor = await hub.waitForDeviceByType(
+              PoweredUP.Consts.DeviceType.DUPLO_TRAIN_BASE_MOTOR
+            );
+
+            let sounds = await hub.waitForDeviceByType(
+              PoweredUP.Consts.DeviceType.DUPLO_TRAIN_BASE_SPEAKER
+            );
+
+            if (hub.uuid === "e5a528f72a8c2aa5db6e41b4ac3b5df7") {
+              trainState.trainId = "train1";
+            }
+            else {
+              trainState.trainId = "train2";
+            }
+
+            trainState.batteryLevel = hub.batteryLevel;
+            trainState.changeMessage = message.Id;
+            
+            if (message.train === trainState.trainId) {
+              if ("speed" === message.state) {
+                trainState.speed = message.value ?? 0;
+                motor.setPower(trainState.speed );
+              }
+              else if ("sound" === message.state) {
+                sounds.playSound(message.value);
+                trainState.sound = message.value;
+              }
+              else {
+                console.log('Unknown Action, resend to spec');
+              }
+            }
+          }
+          // console.log(trainState);
+          publishMessage(topicId, JSON.stringify(trainState));
+          });
+      //  }
+      });
+    messages = [];
+    }
+}, 2000);
