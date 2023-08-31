@@ -38,11 +38,12 @@ function listenForMessages(timeout) {
       "state" : messageData.state,
       "value" : messageData.value
     };
+    message.ack();
 
     messages.push(messageResponse);
     // console.log(`${JSON.stringify(messageResponse)}`);
 
-    message.ack();
+
   };
 
   // Listen for new messages until timeout is hit
@@ -60,16 +61,13 @@ poweredUP.on("discover", async (hub) => {
     hub.on("disconnect", () => {
         console.log("Hub disconnected");
     })
-    let color = await hub.waitForDeviceByType(
-      PoweredUP.Consts.DeviceType.HUB_LED
-    );
     
-    if (hub.uuid === "e5a528f72a8c2aa5db6e41b4ac3b5df7") {
-      color.setColor(8)
-    }
-    else {
-      color.setColor(9)
-    }
+    // if (hub.uuid === "e5a528f72a8c2aa5db6e41b4ac3b5df7") {
+    //   color.setColor(8)
+    // }
+    // else {
+    //   color.setColor(9)
+    // }
 
 });
 
@@ -92,6 +90,10 @@ setInterval(async () => {
               PoweredUP.Consts.DeviceType.DUPLO_TRAIN_BASE_SPEAKER
             );
 
+            let color = await hub.waitForDeviceByType(
+              PoweredUP.Consts.DeviceType.HUB_LED
+            );
+
             if (hub.uuid === "e5a528f72a8c2aa5db6e41b4ac3b5df7") {
               trainState.trainId = "train1";
             }
@@ -110,6 +112,10 @@ setInterval(async () => {
               else if ("sound" === message.state) {
                 sounds.playSound(message.value);
                 trainState.sound = message.value;
+              }
+              else if ("color" === message.state) {
+                color.setColor(message.value);
+                trainState.color = message.value;
               }
               else {
                 console.log('Unknown Action, resend to spec');
