@@ -23,3 +23,7 @@ Your Pi needs to have Node and npm installed.
     where `trainX` is the train you have (typically train1 unless you have multiple 
     connected to the same controller).
 1.  Open the `telemetry_data` table to see real time state changes from the train.
+
+## Credits
+Thanks to Nathan Kellenicki(@nathankellenicki) and his fleet of supporters building the PoweredUp package.
+(https://github.com/nathankellenicki/node-poweredup)
